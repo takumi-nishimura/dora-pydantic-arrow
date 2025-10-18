@@ -22,4 +22,5 @@ build-backend = "hatchling.build"
 [dependency-groups]
 dev = [
     "pytest>=8.4.2",
+    "uuid-utils>=0.11.1",
 ]
