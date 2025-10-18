@@ -6,6 +6,7 @@ from datetime import date, datetime, time
 from decimal import Decimal
 from types import UnionType
 from typing import Any, Union, get_args, get_origin
+from uuid import UUID
 
 import pyarrow as pa
 from pydantic import BaseModel
@@ -100,5 +101,8 @@ def _simple_type_to_arrow(annotation: Any, config: DAConfig | None) -> pa.DataTy
     if annotation is Decimal:
         cfg = config or DAConfig()
         return pa.decimal128(cfg.decimal_precision, cfg.decimal_scale)
+
+    if annotation is UUID:
+        return pa.binary(16)
 
     raise UnsupportedTypeError(f"Unsupported type annotation: {annotation!r}")

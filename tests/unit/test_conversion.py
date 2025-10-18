@@ -1,3 +1,4 @@
+import json
 from uuid import UUID
 
 import pyarrow as pa
@@ -27,12 +28,18 @@ def test_to_arrow_from_arrow_roundtrip_models() -> None:
 
     assert isinstance(table, pa.Table)
     assert table.num_rows == len(rows)
+    assert table.schema.field("id").type == pa.binary(16)
 
     metadata = table.schema.metadata or {}
     assert metadata[b"pydantic_model_fqn"].decode() == (
         f"{ExampleModel.__module__}.{ExampleModel.__qualname__}"
     )
     assert metadata[b"datetime_policy"].decode() == DAConfig().datetime_policy
+    assert metadata[b"uuid.encoding"] == b"binary16"
+    assert metadata[b"uuid_utils"] == b"true"
+    assert metadata[b"uuid.version"] == b"7"
+    uuid_columns = json.loads(metadata[b"uuid_columns"].decode())
+    assert "id" in uuid_columns
 
     restored = dpa.from_arrow(table, type_hint=list[ExampleModel])
     assert restored == rows
@@ -45,7 +52,7 @@ def test_schema_from_model_respects_optional() -> None:
     score_field = schema.field("score")
 
     assert id_field.nullable is False
-    assert id_field.type == pa.int64()
+    assert id_field.type == pa.binary(16)
     assert score_field.nullable is True
     assert score_field.type == pa.float64()
 
