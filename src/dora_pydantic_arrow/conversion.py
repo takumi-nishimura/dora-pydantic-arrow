@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import asdict
+from datetime import datetime, timezone
 import hashlib
 import json
-from typing import Any, TypeVar, get_args, get_origin
+from typing import Any, Callable, TypeVar, get_args, get_origin
 from uuid import UUID
 
 import pyarrow as pa
@@ -36,20 +37,22 @@ def to_arrow(
     """Convert Python objects or Pydantic models into Arrow data structures."""
 
     rows, model_type = _normalise_input(obj)
+    active_config = config or DAConfig()
 
     if not rows:
         if schema is None:
             raise ValueError("Unable to infer schema from empty input; provide a schema")
         table = pa.Table.from_pylist([], schema=schema)
-        return _apply_metadata(table, model_type, config)
+        return _apply_metadata(table, model_type, active_config)
 
     if schema is None and model_type is not None:
-        schema = schema_from_model(model_type, config=config)
+        schema = schema_from_model(model_type, config=active_config)
 
+    rows = _normalise_datetime_values(rows, active_config)
     rows, extra_metadata = _encode_special_types(rows)
 
     table = pa.Table.from_pylist(rows, schema=schema)
-    table = _apply_metadata(table, model_type, config)
+    table = _apply_metadata(table, model_type, active_config)
 
     if extra_metadata:
         metadata = dict(table.schema.metadata or {})
@@ -72,8 +75,12 @@ def from_arrow(
     """Convert Arrow data back into Python/Pydantic objects."""
 
     table = _ensure_table(data)
+    active_config = config or DAConfig()
     rows = table.to_pylist()
     rows = _decode_special_types(rows, table.schema.metadata)
+
+    datetime_policy = _metadata_datetime_policy(table.schema.metadata, active_config)
+    rows = _restore_datetime_values(rows, datetime_policy)
 
     if type_hint is None:
         return rows  # type: ignore[return-value]
@@ -260,3 +267,57 @@ def _decode_special_types(
             decoded_row[key] = decode(value, key)
         decoded_rows.append(decoded_row)
     return decoded_rows
+
+
+def _normalise_datetime_values(rows: list[dict[str, Any]], config: DAConfig) -> list[dict[str, Any]]:
+    return [_map_values(row, lambda value: _normalise_datetime(value, config.datetime_policy)) for row in rows]
+
+
+def _restore_datetime_values(rows: list[dict[str, Any]], policy: str) -> list[dict[str, Any]]:
+    return [_map_values(row, lambda value: _restore_datetime(value, policy)) for row in rows]
+
+
+def _map_values(payload: dict[str, Any], transform: Callable[[Any], Any]) -> dict[str, Any]:
+    def apply(value: Any) -> Any:
+        if isinstance(value, dict):
+            return {key: apply(child) for key, child in value.items()}
+        if isinstance(value, list):
+            return [apply(child) for child in value]
+        if isinstance(value, tuple):
+            return tuple(apply(child) for child in value)
+        return transform(value)
+
+    return {key: apply(value) for key, value in payload.items()}
+
+
+def _normalise_datetime(value: Any, policy: str) -> Any:
+    if not isinstance(value, datetime):
+        return value
+
+    if value.tzinfo is None:
+        if policy == "normalize_utc":
+            return value.replace(tzinfo=timezone.utc)
+        if policy == "error_on_naive":
+            raise ValueError("Naive datetime encountered under 'error_on_naive' policy")
+        return value
+
+    if policy == "normalize_utc":
+        return value.astimezone(timezone.utc)
+    return value
+
+
+def _restore_datetime(value: Any, policy: str) -> Any:
+    if not isinstance(value, datetime):
+        return value
+
+    if policy == "normalize_utc":
+        if value.tzinfo is not None:
+            return value.astimezone(timezone.utc).replace(tzinfo=None)
+        return value
+    return value
+
+
+def _metadata_datetime_policy(metadata: dict[bytes, bytes] | None, config: DAConfig) -> str:
+    if metadata and b"datetime_policy" in metadata:
+        return metadata[b"datetime_policy"].decode()
+    return config.datetime_policy

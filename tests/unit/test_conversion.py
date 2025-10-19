@@ -1,4 +1,5 @@
 import json
+from datetime import datetime
 from uuid import UUID
 
 import pyarrow as pa
@@ -14,6 +15,7 @@ from dora_pydantic_arrow import (
 
 class ExampleModel(BaseModel):
     id: UUID7 = Field(default_factory=lambda: UUID(bytes=uuid_utils.uuid7().bytes))
+    date: datetime = Field(default_factory=datetime.now)
     name: str
     score: float | None = None
 
