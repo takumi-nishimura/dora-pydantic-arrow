@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, time
 from decimal import Decimal
+from enum import Enum
 from types import UnionType
 from typing import Any, Union, get_args, get_origin
 from uuid import UUID
@@ -73,6 +74,15 @@ def _simple_type_to_arrow(annotation: Any, config: DAConfig | None) -> pa.DataTy
     if isinstance(annotation, type) and issubclass(annotation, BaseModel):
         nested_schema = schema_from_model(annotation, config=config)
         return pa.struct(nested_schema)
+
+    if isinstance(annotation, type) and issubclass(annotation, Enum):
+        value_types = {type(member.value) for member in annotation}
+        if not value_types:
+            raise UnsupportedTypeError("Enum annotations must declare at least one value")
+        if len(value_types) != 1:
+            raise UnsupportedTypeError("Enums with mixed value types are not supported")
+        value_type = value_types.pop()
+        return _simple_type_to_arrow(value_type, config)
 
     if annotation is int:
         return pa.int64()

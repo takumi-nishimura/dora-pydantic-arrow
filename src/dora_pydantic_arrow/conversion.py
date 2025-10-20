@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import asdict
 from datetime import datetime, timezone
+from enum import Enum
 import hashlib
 import json
 from typing import Any, Callable, TypeVar, get_args, get_origin
@@ -195,6 +196,9 @@ def _encode_special_types(
             if info.get("version") != value.version:
                 info["version"] = None
             return value.bytes
+
+        if isinstance(value, Enum):
+            return value.value
 
         if isinstance(value, list):
             return [encode(item, f"{path}[]") for item in value]
