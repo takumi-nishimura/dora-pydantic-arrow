@@ -1,6 +1,7 @@
 import json
 from datetime import datetime
 from enum import Enum
+from typing import Any, Dict, Optional
 from uuid import UUID
 
 import pyarrow as pa
@@ -31,12 +32,22 @@ class ExampleModel(BaseModel):
     kind_int: IntKind = IntKind.FIRST
     name: str
     score: float | None = None
+    payload: Optional[Dict[str, Any]] = None
 
 
 def test_to_arrow_from_arrow_roundtrip_models() -> None:
     rows = [
         ExampleModel(name="Alice", score=0.5),
-        ExampleModel(name="Bob", score=None),
+        ExampleModel(
+            name="Bob",
+            score=None,
+            payload={
+                "string": "value",
+                "number": 42,
+                "list": [1, 2, 3],
+                "nested": {"a": 1},
+            },
+        ),
     ]
 
     table = dpa.to_arrow(rows)
@@ -65,11 +76,15 @@ def test_schema_from_model_respects_optional() -> None:
 
     id_field = schema.field("id")
     score_field = schema.field("score")
+    payload_field = schema.field("payload")
 
     assert id_field.nullable is False
     assert id_field.type == pa.binary(16)
     assert score_field.nullable is True
     assert score_field.type == pa.float64()
+    assert payload_field.nullable is True
+    assert payload_field.type == pa.large_binary()
+    assert (payload_field.metadata or {}).get(b"dpa.serialized") == b"dict_any"
 
 
 def test_batch_builder_creates_record_batch() -> None:

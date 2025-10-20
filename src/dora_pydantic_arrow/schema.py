@@ -15,6 +15,9 @@ from pydantic import BaseModel
 from .config import DAConfig
 from .exceptions import UnsupportedTypeError
 
+SERIALIZED_FIELD_METADATA_KEY = b"dpa.serialized"
+SERIALIZED_FIELD_KIND_DICT_ANY = b"dict_any"
+
 
 def schema_from_model(model_type: type[BaseModel], *, config: DAConfig | None = None) -> pa.Schema:
     """Create an Arrow schema representing the supplied Pydantic model."""
@@ -23,7 +26,8 @@ def schema_from_model(model_type: type[BaseModel], *, config: DAConfig | None = 
     for name, field in model_type.model_fields.items():
         annotation = field.annotation or field.outer_type_  # type: ignore[assignment]
         arrow_type, nullable = _annotation_to_arrow(annotation, config)
-        fields.append(pa.field(name, arrow_type, nullable=nullable))
+        field_metadata = _field_metadata_for_annotation(annotation)
+        fields.append(pa.field(name, arrow_type, nullable=nullable, metadata=field_metadata))
     return pa.schema(fields)
 
 
@@ -47,10 +51,15 @@ def _annotation_to_arrow(annotation: Any, config: DAConfig | None) -> tuple[pa.D
         return pa.list_(item_type), False
 
     if origin is dict:
-        key_type, _ = _annotation_to_arrow(args[0], config)
-        value_type, _ = _annotation_to_arrow(args[1], config)
+        key_annotation, value_annotation = args
+        key_type, key_nullable = _annotation_to_arrow(key_annotation, config)
+        if key_nullable:
+            raise UnsupportedTypeError("Dictionary key annotations cannot be optional")
         if not pa.types.is_string(key_type):
             raise UnsupportedTypeError("Only string dictionary keys are supported")
+        if value_annotation is Any:
+            return pa.large_binary(), False
+        value_type, _ = _annotation_to_arrow(value_annotation, config)
         return pa.map_(key_type, value_type), False
 
     if origin in (Union, UnionType):
@@ -116,3 +125,33 @@ def _simple_type_to_arrow(annotation: Any, config: DAConfig | None) -> pa.DataTy
         return pa.binary(16)
 
     raise UnsupportedTypeError(f"Unsupported type annotation: {annotation!r}")
+
+
+def _field_metadata_for_annotation(annotation: Any) -> dict[bytes, bytes] | None:
+    base_annotation = _strip_optional(annotation)
+
+    if _is_dict_with_any_values(base_annotation):
+        return {
+            SERIALIZED_FIELD_METADATA_KEY: SERIALIZED_FIELD_KIND_DICT_ANY,
+        }
+
+    return None
+
+
+def _strip_optional(annotation: Any) -> Any:
+    origin = get_origin(annotation)
+    if origin in (Union, UnionType):
+        args = [arg for arg in get_args(annotation) if arg is not type(None)]  # noqa: E721
+        if len(args) == 1:
+            return args[0]
+    return annotation
+
+
+def _is_dict_with_any_values(annotation: Any) -> bool:
+    if get_origin(annotation) is not dict:
+        return False
+    args = get_args(annotation)
+    if len(args) != 2:
+        return False
+    key_annotation, value_annotation = args
+    return key_annotation is str and value_annotation is Any

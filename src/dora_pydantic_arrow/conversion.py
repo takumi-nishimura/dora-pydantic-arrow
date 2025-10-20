@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from enum import Enum
 import hashlib
 import json
+import pickle
 from typing import Any, Callable, TypeVar, get_args, get_origin
 from uuid import UUID
 
@@ -17,7 +18,11 @@ from pydantic.version import VERSION as PYDANTIC_VERSION
 
 from .config import DAConfig
 from .exceptions import SchemaMismatchError, UnsupportedTypeError
-from .schema import schema_from_model
+from .schema import (
+    SERIALIZED_FIELD_KIND_DICT_ANY,
+    SERIALIZED_FIELD_METADATA_KEY,
+    schema_from_model,
+)
 
 UUID_METADATA_KEY = b"uuid_columns"
 UUID_VERSION_KEY = b"uuid.version"
@@ -52,6 +57,9 @@ def to_arrow(
     rows = _normalise_datetime_values(rows, active_config)
     rows, extra_metadata = _encode_special_types(rows)
 
+    if schema is not None:
+        rows = _serialise_field_values(rows, schema)
+
     table = pa.Table.from_pylist(rows, schema=schema)
     table = _apply_metadata(table, model_type, active_config)
 
@@ -78,6 +86,7 @@ def from_arrow(
     table = _ensure_table(data)
     active_config = config or DAConfig()
     rows = table.to_pylist()
+    rows = _deserialise_field_values(rows, table.schema)
     rows = _decode_special_types(rows, table.schema.metadata)
 
     datetime_policy = _metadata_datetime_policy(table.schema.metadata, active_config)
@@ -271,6 +280,56 @@ def _decode_special_types(
             decoded_row[key] = decode(value, key)
         decoded_rows.append(decoded_row)
     return decoded_rows
+
+
+def _serialise_field_values(
+    rows: list[dict[str, Any]], schema: pa.Schema
+) -> list[dict[str, Any]]:
+    target_fields = _schema_serialised_fields(schema)
+    if not target_fields:
+        return rows
+
+    serialised_rows: list[dict[str, Any]] = []
+    for original in rows:
+        serialised_row = dict(original)
+        for field_name in target_fields:
+            value = serialised_row.get(field_name)
+            if value is None:
+                continue
+            serialised_row[field_name] = pickle.dumps(value, protocol=pickle.HIGHEST_PROTOCOL)
+        serialised_rows.append(serialised_row)
+    return serialised_rows
+
+
+def _deserialise_field_values(
+    rows: list[dict[str, Any]], schema: pa.Schema
+) -> list[dict[str, Any]]:
+    target_fields = _schema_serialised_fields(schema)
+    if not target_fields:
+        return rows
+
+    deserialised_rows: list[dict[str, Any]] = []
+    for original in rows:
+        deserialised_row = dict(original)
+        for field_name in target_fields:
+            value = deserialised_row.get(field_name)
+            if value is None:
+                continue
+            if isinstance(value, memoryview):
+                value = value.tobytes()
+            if isinstance(value, (bytes, bytearray)):
+                deserialised_row[field_name] = pickle.loads(value)
+        deserialised_rows.append(deserialised_row)
+    return deserialised_rows
+
+
+def _schema_serialised_fields(schema: pa.Schema) -> set[str]:
+    fields: set[str] = set()
+    for field in schema:
+        metadata = field.metadata or {}
+        if metadata.get(SERIALIZED_FIELD_METADATA_KEY) == SERIALIZED_FIELD_KIND_DICT_ANY:
+            fields.add(field.name)
+    return fields
 
 
 def _normalise_datetime_values(rows: list[dict[str, Any]], config: DAConfig) -> list[dict[str, Any]]:
