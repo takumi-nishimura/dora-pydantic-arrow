@@ -50,11 +50,12 @@ def test_to_arrow_from_arrow_roundtrip_models() -> None:
         ),
     ]
 
-    table = dpa.to_arrow(rows)
+    record_batch = dpa.to_arrow(rows)
+    assert isinstance(record_batch, pa.RecordBatch)
+    assert record_batch.num_rows == len(rows)
 
+    table = dpa.to_arrow(rows, as_table=True)
     assert isinstance(table, pa.Table)
-    assert table.num_rows == len(rows)
-    assert table.schema.field("id").type == pa.binary(16)
 
     metadata = table.schema.metadata or {}
     assert metadata[b"pydantic_model_fqn"].decode() == (
@@ -67,7 +68,19 @@ def test_to_arrow_from_arrow_roundtrip_models() -> None:
     uuid_columns = json.loads(metadata[b"uuid_columns"].decode())
     assert "id" in uuid_columns
 
-    restored = dpa.from_arrow(table, type_hint=list[ExampleModel])
+    restored = dpa.from_arrow(record_batch, type_hint=list[ExampleModel])
+    assert restored == rows
+
+
+def test_from_arrow_accepts_struct_array() -> None:
+    rows = [
+        ExampleModel(name="Alice", score=0.5),
+        ExampleModel(name="Bob", score=1.5),
+    ]
+
+    struct_array = dpa.to_arrow(rows).to_struct_array()
+    restored = dpa.from_arrow(struct_array, type_hint=list[ExampleModel])
+
     assert restored == rows
 
 

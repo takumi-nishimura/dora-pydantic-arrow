@@ -26,8 +26,9 @@ to_arrow(
     obj,
     *,
     schema: pa.Schema | None = None,
-    config: DAConfig | None = None
-) -> pa.Array | pa.RecordBatch | pa.Table
+    config: DAConfig | None = None,
+    as_table: bool = False,
+) -> pa.RecordBatch | pa.Table
 
 # 受信（Arrow → Python/Pydantic）
 from_arrow(
@@ -155,7 +156,8 @@ back = from_arrow(rb, type_hint=list[MyModel])
 ---
 
 ## dora-rs 連携
-- `send_output` には `to_arrow(...)` の結果を直接渡す想定
+- `send_output` には `to_arrow(..., as_table=False)` の結果（RecordBatch）がそのまま渡せる
+- Dora Runtime は受信側へ `StructArray` として値を渡すため、`from_arrow` はこの形式を自動でテーブルへ復元してからデコードする
 - `dora_event["value"]` から Arrow Array を受け、`from_arrow(...)` で復元
 
 ---

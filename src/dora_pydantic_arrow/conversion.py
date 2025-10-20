@@ -39,8 +39,14 @@ def to_arrow(
     *,
     schema: pa.Schema | None = None,
     config: DAConfig | None = None,
-) -> pa.Table | pa.RecordBatch:
-    """Convert Python objects or Pydantic models into Arrow data structures."""
+    as_table: bool = False,
+) -> pa.RecordBatch | pa.Table:
+    """Convert Python objects or Pydantic models into Arrow data structures.
+
+    When ``as_table`` is ``False`` (default), a :class:`pyarrow.RecordBatch` is returned so the
+    payload can be sent directly via ``dora.send_output`` which currently expects Arrow arrays．
+    Set ``as_table=True`` to obtain a :class:`pyarrow.Table` while preserving identical metadata．
+    """
 
     rows, model_type = _normalise_input(obj)
     active_config = config or DAConfig()
@@ -68,10 +74,15 @@ def to_arrow(
         metadata.update(extra_metadata)
         table = table.replace_schema_metadata(metadata)
 
-    if _is_single_object(obj):
-        batches = table.to_batches()
-        return batches[0] if batches else pa.RecordBatch.from_arrays([], schema=table.schema)
-    return table
+    if as_table:
+        return table
+
+    combined = table.combine_chunks()
+    batches = combined.to_batches(max_chunksize=combined.num_rows or 1)
+    if batches:
+        return batches[0]
+    arrays = [pa.array([], type=field.type) for field in combined.schema]
+    return pa.RecordBatch.from_arrays(arrays, schema=combined.schema)
 
 
 def from_arrow(
@@ -172,14 +183,42 @@ def _json_default(obj: Any) -> Any:
     raise TypeError(f"Object of type {type(obj).__name__} is not JSON serialisable")
 
 
-def _ensure_table(data: pa.Array | pa.RecordBatch | pa.Table) -> pa.Table:
+def _ensure_table(
+    data: pa.Array | pa.ChunkedArray | pa.RecordBatch | pa.Table,
+) -> pa.Table:
     if isinstance(data, pa.Table):
         return data
     if isinstance(data, pa.RecordBatch):
         return pa.Table.from_batches([data])
+    if isinstance(data, pa.ChunkedArray):
+        if pa.types.is_struct(data.type):
+            return _table_from_struct_array(data.combine_chunks())
+        return pa.Table.from_arrays([data], names=["value"])
     if isinstance(data, pa.Array):
+        if pa.types.is_struct(data.type):
+            return _table_from_struct_array(data)
         return pa.Table.from_arrays([data], names=["value"])
     raise UnsupportedTypeError(f"Unsupported Arrow type: {type(data)!r}")
+
+
+def _table_from_struct_array(struct_array: pa.StructArray) -> pa.Table:
+    fields = []
+    columns = []
+    struct_type = struct_array.type
+    for index in range(struct_type.num_fields):
+        field = struct_type[index]
+        fields.append(
+            pa.field(field.name, field.type, nullable=field.nullable, metadata=field.metadata)
+        )
+        columns.append(struct_array.field(index))
+
+    schema = pa.schema(fields)
+
+    array_metadata = getattr(struct_array, "schema_metadata", None)
+    if array_metadata:
+        schema = schema.with_metadata(array_metadata)
+
+    return pa.Table.from_arrays(columns, schema=schema)
 
 
 def _coerce_row(row: dict[str, Any], target: type[Any], *, validate: bool) -> Any:
@@ -188,10 +227,6 @@ def _coerce_row(row: dict[str, Any], target: type[Any], *, validate: bool) -> An
             return target.model_validate(row)
         return target.model_construct(**row)
     return row
-
-
-def _is_single_object(obj: Any) -> bool:
-    return isinstance(obj, (BaseModel, dict))
 
 
 def _encode_special_types(

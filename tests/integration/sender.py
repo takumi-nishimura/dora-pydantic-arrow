@@ -17,6 +17,6 @@ class Operator:
             int_kind=IntKind.FIRST,
             payload={"frame": self.frame_count},
         )
-        send_output("frame_count", to_arrow([data]))
+        send_output("frame_count", to_arrow(data))
 
         return DoraStatus.CONTINUE

@@ -1,8 +1,7 @@
-from typing import List
-
 from dora import DoraStatus
-from dora_pydantic_arrow import from_arrow
 from model import ExampleModel
+
+from dora_pydantic_arrow import from_arrow
 
 
 class Operator:
@@ -13,7 +12,7 @@ class Operator:
         if dora_event["type"] == "INPUT":
             if dora_event["id"] == "frame_count":
                 arrow_array = dora_event["value"]
-                data = from_arrow(arrow_array, type_hint=List[ExampleModel])
+                data = from_arrow(arrow_array, type_hint=ExampleModel)
                 print(f"Received data: {data}")
 
         return DoraStatus.CONTINUE
