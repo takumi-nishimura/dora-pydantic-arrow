@@ -1,5 +1,6 @@
 import json
 from datetime import datetime
+from enum import Enum
 from uuid import UUID
 
 import pyarrow as pa
@@ -13,9 +14,21 @@ from dora_pydantic_arrow import (
 )
 
 
+class StrKind(Enum):
+    EXAMPLE = "example"
+    ANOTHER = "another"
+
+
+class IntKind(Enum):
+    FIRST = 1
+    SECOND = 2
+
+
 class ExampleModel(BaseModel):
     id: UUID7 = Field(default_factory=lambda: UUID(bytes=uuid_utils.uuid7().bytes))
     date: datetime = Field(default_factory=datetime.now)
+    kind_str: StrKind = StrKind.EXAMPLE
+    kind_int: IntKind = IntKind.FIRST
     name: str
     score: float | None = None
 
