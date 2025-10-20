@@ -57,7 +57,7 @@ def _annotation_to_arrow(annotation: Any, config: DAConfig | None) -> tuple[pa.D
             raise UnsupportedTypeError("Dictionary key annotations cannot be optional")
         if not pa.types.is_string(key_type):
             raise UnsupportedTypeError("Only string dictionary keys are supported")
-        if value_annotation is Any:
+        if _dict_value_requires_serialization(value_annotation):
             return pa.large_binary(), False
         value_type, _ = _annotation_to_arrow(value_annotation, config)
         return pa.map_(key_type, value_type), False
@@ -154,4 +154,37 @@ def _is_dict_with_any_values(annotation: Any) -> bool:
     if len(args) != 2:
         return False
     key_annotation, value_annotation = args
-    return key_annotation is str and value_annotation is Any
+    if key_annotation is not str:
+        return False
+    return _dict_value_requires_serialization(value_annotation)
+
+
+def _dict_value_requires_serialization(annotation: Any) -> bool:
+    if annotation is Any:
+        return True
+
+    origin = get_origin(annotation)
+    if origin in (Union, UnionType):
+        args = [arg for arg in get_args(annotation) if arg is not type(None)]  # noqa: E721
+        if len(args) <= 1:
+            return False
+        return all(_is_json_like_type(arg) for arg in args)
+
+    return False
+
+
+def _is_json_like_type(annotation: Any) -> bool:
+    if annotation in (str, int, float, bool, dict, list):
+        return True
+
+    if annotation is type(None):  # noqa: E721
+        return True
+
+    origin = get_origin(annotation)
+    if origin in (list, dict):
+        args = get_args(annotation)
+        if not args:
+            return True
+        return all(_is_json_like_type(arg) for arg in args)
+
+    return False

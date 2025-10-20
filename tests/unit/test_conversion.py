@@ -1,7 +1,7 @@
 import json
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, Optional
+from typing import Dict, List, Optional, Union
 from uuid import UUID
 
 import pyarrow as pa
@@ -32,7 +32,7 @@ class ExampleModel(BaseModel):
     kind_int: IntKind = IntKind.FIRST
     name: str
     score: float | None = None
-    payload: Optional[Dict[str, Any]] = None
+    payload: Optional[Dict[str, Union[str, int, float, bool, None, List, Dict]]] = None
 
 
 def test_to_arrow_from_arrow_roundtrip_models() -> None:

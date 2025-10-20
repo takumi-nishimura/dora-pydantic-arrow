@@ -1,0 +1,13 @@
+nodes:
+  - id: sender
+    operator:
+      python: "sender.py"
+      inputs:
+        tick: dora/timer/millis/100
+      outputs:
+        - frame_count
+  - id: receiver
+    operator:
+      python: "receiver.py"
+      inputs:
+        frame_count: sender/frame_count
