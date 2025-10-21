@@ -4,6 +4,7 @@ from enum import Enum
 from typing import Dict, List, Optional, Union
 from uuid import UUID
 
+import numpy as np
 import pyarrow as pa
 import uuid_utils
 from pydantic import UUID7, BaseModel, Field
@@ -33,6 +34,7 @@ class ExampleModel(BaseModel):
     name: str
     score: float | None = None
     payload: Optional[Dict[str, Union[str, int, float, bool, None, List, Dict]]] = None
+    images: Optional[Dict[str, np.ndarray]] = None
 
 
 def test_to_arrow_from_arrow_roundtrip_models() -> None:
@@ -47,6 +49,7 @@ def test_to_arrow_from_arrow_roundtrip_models() -> None:
                 "list": [1, 2, 3],
                 "nested": {"a": 1},
             },
+            images={"img1": np.random.randint(0, 255, (64, 64, 3), dtype=np.uint8)},
         ),
     ]
 
