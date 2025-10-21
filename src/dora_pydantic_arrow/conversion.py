@@ -14,12 +14,14 @@ from uuid import UUID
 
 import pyarrow as pa
 from pydantic import BaseModel
+from pydantic.errors import PydanticInvalidForJsonSchema
 from pydantic.version import VERSION as PYDANTIC_VERSION
 
 from .config import DAConfig
 from .exceptions import SchemaMismatchError, UnsupportedTypeError
 from .schema import (
     SERIALIZED_FIELD_KIND_DICT_ANY,
+    SERIALIZED_FIELD_KIND_NDARRAY,
     SERIALIZED_FIELD_METADATA_KEY,
     schema_from_model,
 )
@@ -161,7 +163,7 @@ def _apply_metadata(
     metadata[b"pydantic_model_fqn"] = _fully_qualified_name(model_type).encode()
     metadata[b"pydantic_version"] = PYDANTIC_VERSION.encode()
     metadata[b"datetime_policy"] = config.datetime_policy.encode()
-    metadata[b"model_schema_hash"] = _hash_json(model_type.model_json_schema())
+    metadata[b"model_schema_hash"] = _hash_json(_model_schema_hash_payload(model_type))
 
     return table.replace_schema_metadata(metadata)
 
@@ -175,12 +177,35 @@ def _hash_json(value: Any) -> bytes:
     return hashlib.sha256(payload).hexdigest().encode()
 
 
+def _model_schema_hash_payload(model_type: type[BaseModel]) -> Any:
+    try:
+        return model_type.model_json_schema()
+    except PydanticInvalidForJsonSchema:
+        return {
+            "type": _fully_qualified_name(model_type),
+            "fields": {
+                name: _annotation_description(field.annotation or field.outer_type_)
+                for name, field in model_type.model_fields.items()
+            },
+        }
+
+
 def _json_default(obj: Any) -> Any:
     if hasattr(obj, "model_dump"):
         return obj.model_dump()
     if dataclass_like := getattr(obj, "__dataclass_fields__", None):
         return asdict(obj)
     raise TypeError(f"Object of type {type(obj).__name__} is not JSON serialisable")
+
+
+def _annotation_description(annotation: Any) -> str:
+    origin = get_origin(annotation)
+    if origin is not None:
+        args = ", ".join(_annotation_description(arg) for arg in get_args(annotation))
+        return f"{_fully_qualified_name(origin)}[{args}]" if isinstance(origin, type) else str(origin)
+    if isinstance(annotation, type):
+        return _fully_qualified_name(annotation)
+    return repr(annotation)
 
 
 def _ensure_table(
@@ -362,7 +387,11 @@ def _schema_serialised_fields(schema: pa.Schema) -> set[str]:
     fields: set[str] = set()
     for field in schema:
         metadata = field.metadata or {}
-        if metadata.get(SERIALIZED_FIELD_METADATA_KEY) == SERIALIZED_FIELD_KIND_DICT_ANY:
+        serialized_kind = metadata.get(SERIALIZED_FIELD_METADATA_KEY)
+        if serialized_kind in {
+            SERIALIZED_FIELD_KIND_DICT_ANY,
+            SERIALIZED_FIELD_KIND_NDARRAY,
+        }:
             fields.add(field.name)
     return fields
 

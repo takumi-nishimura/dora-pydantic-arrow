@@ -12,11 +12,17 @@ from uuid import UUID
 import pyarrow as pa
 from pydantic import BaseModel
 
+try:  # pragma: no cover - optional dependency
+    import numpy as np
+except ImportError:  # pragma: no cover - numpy is optional
+    np = None  # type: ignore[assignment]
+
 from .config import DAConfig
 from .exceptions import UnsupportedTypeError
 
 SERIALIZED_FIELD_METADATA_KEY = b"dpa.serialized"
 SERIALIZED_FIELD_KIND_DICT_ANY = b"dict_any"
+SERIALIZED_FIELD_KIND_NDARRAY = b"ndarray"
 
 
 def schema_from_model(model_type: type[BaseModel], *, config: DAConfig | None = None) -> pa.Schema:
@@ -80,6 +86,9 @@ def _handle_union(args: tuple[Any, ...], config: DAConfig | None) -> tuple[pa.Da
 
 
 def _simple_type_to_arrow(annotation: Any, config: DAConfig | None) -> pa.DataType:
+    if _is_numpy_ndarray(annotation):
+        return pa.large_binary()
+
     if isinstance(annotation, type) and issubclass(annotation, BaseModel):
         nested_schema = schema_from_model(annotation, config=config)
         return pa.struct(nested_schema)
@@ -135,6 +144,11 @@ def _field_metadata_for_annotation(annotation: Any) -> dict[bytes, bytes] | None
             SERIALIZED_FIELD_METADATA_KEY: SERIALIZED_FIELD_KIND_DICT_ANY,
         }
 
+    if _is_numpy_ndarray(base_annotation):
+        return {
+            SERIALIZED_FIELD_METADATA_KEY: SERIALIZED_FIELD_KIND_NDARRAY,
+        }
+
     return None
 
 
@@ -160,6 +174,9 @@ def _is_dict_with_any_values(annotation: Any) -> bool:
 
 
 def _dict_value_requires_serialization(annotation: Any) -> bool:
+    if _is_numpy_ndarray(annotation):
+        return True
+
     if annotation is Any:
         return True
 
@@ -171,6 +188,10 @@ def _dict_value_requires_serialization(annotation: Any) -> bool:
         return all(_is_json_like_type(arg) for arg in args)
 
     return False
+
+
+def _is_numpy_ndarray(annotation: Any) -> bool:
+    return np is not None and annotation is np.ndarray
 
 
 def _is_json_like_type(annotation: Any) -> bool:

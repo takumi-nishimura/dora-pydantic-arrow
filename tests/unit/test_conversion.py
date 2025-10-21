@@ -7,7 +7,7 @@ from uuid import UUID
 import numpy as np
 import pyarrow as pa
 import uuid_utils
-from pydantic import UUID7, BaseModel, Field
+from pydantic import UUID7, BaseModel, ConfigDict, Field
 
 import dora_pydantic_arrow as dpa
 from dora_pydantic_arrow import (
@@ -27,6 +27,8 @@ class IntKind(Enum):
 
 
 class ExampleModel(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     id: UUID7 = Field(default_factory=lambda: UUID(bytes=uuid_utils.uuid7().bytes))
     date: datetime = Field(default_factory=datetime.now)
     kind_str: StrKind = StrKind.EXAMPLE
@@ -72,7 +74,19 @@ def test_to_arrow_from_arrow_roundtrip_models() -> None:
     assert "id" in uuid_columns
 
     restored = dpa.from_arrow(record_batch, type_hint=list[ExampleModel])
-    assert restored == rows
+
+    assert len(restored) == len(rows)
+    for restored_row, original_row in zip(restored, rows, strict=True):
+        assert restored_row.model_dump(exclude={"images"}) == original_row.model_dump(
+            exclude={"images"}
+        )
+        if original_row.images is None:
+            assert restored_row.images is None
+        else:
+            assert restored_row.images is not None
+            assert restored_row.images.keys() == original_row.images.keys()
+            for name in original_row.images:
+                assert np.array_equal(restored_row.images[name], original_row.images[name])
 
 
 def test_from_arrow_accepts_struct_array() -> None:
